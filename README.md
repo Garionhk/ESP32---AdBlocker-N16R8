@@ -146,12 +146,58 @@ dig @192.168.0.254 doubleclick.net
 
 `0.0.0.0` means it's blocking.
 
-**Things that bypass any DNS blocker:**
-- **Chrome's "Use secure DNS":** turn it off, or set it to "your current provider". Firefox's
-  equivalent and iCloud Private Relay are switched off for you.
-- **IPv6 DNS from the router:** the board answers on IPv6 too, but only helps if your router
-  lets you hand it out as the IPv6 DNS server. If it doesn't, turn off IPv6 DNS on the router.
-- **VPNs.**
+Then read [How well it blocks](#how-well-it-blocks) for what to expect and how to tighten it.
+
+## How well it blocks
+
+It blocks as well as Pi-hole does with the same list, because both work the same way: by
+refusing to look up ad and tracker domains. How much that catches depends on **which list you
+use** and on **what can go around DNS**, not on the board.
+
+### What it blocks well, and what it can't
+
+| Blocks well | Can't block (no DNS blocker can) |
+|---|---|
+| third-party ad networks and trackers (DoubleClick, ad exchanges, analytics) | **YouTube ads**: they come from the same servers as the videos |
+| in-app ads in many free apps and games | **Facebook, Instagram, TikTok** sponsored posts, **Twitch** and **Spotify** ads |
+| smart TV, console and IoT telemetry; ad tiles on TV home screens | any ad served from the site's own domain |
+| malware, phishing and scam domains (with the default list) | the empty box a blocked ad can leave behind |
+
+Rough expectations: **smart TVs, apps and games** see the biggest difference, since they can't run
+an ad blocker of their own. **Web browsing** loses most banner and tracker ads; with a browser
+blocker on top, nearly all. **YouTube and social feeds** barely change.
+
+### Your options
+
+None of these need code changes. Pick what suits your household.
+
+| Option | Where | Effect |
+|---|---|---|
+| **Choose a list** | Settings → Blocklist | Hagezi Multi PRO (default) is strong with few false positives. Hagezi Multi NORMAL is gentler; StevenBlack is conservative. See [Blocklists](#blocklists) |
+| **Block encrypted-DNS bypass** | add a second URL in Settings → Blocklist | stops apps and browsers going around the board with their own encrypted DNS (see below) |
+| **Turn off Chrome's "Use secure DNS"** | Chrome settings on each device | or set it to "your current provider". Firefox's equivalent and iCloud Private Relay are switched off for you |
+| **Android "Private DNS"** | phone settings | leave it on *Automatic* or *Off*. A named provider (e.g. `dns.google`) goes around the board |
+| **Close the DNS back door** | router firewall, if it has one | block outgoing ports 53 and 853 from every device except the board. Catches devices with hard-coded DNS, such as some Chromecasts, Android TVs and apps |
+| **IPv6 DNS** | router | hand out the board's IPv6 address as the IPv6 DNS server, or turn IPv6 DNS off, so devices can't fall back to another server |
+| **A browser blocker** | each computer's browser | uBlock Origin handles what DNS can't: YouTube, cosmetic clean-up, same-site ads |
+| **Unblock what breaks** | ntfy `unblock <domain>`, or **allow** in the Query log | the most specific entry wins, so one exception doesn't open up the whole domain |
+
+**Encrypted-DNS bypass lists** (paste one as an extra line under Blocklist URLs):
+
+| List | Entries | Blocks |
+|---|---|---|
+| `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh.txt` | ~3,300 | public DNS-over-HTTPS / DNS-over-TLS servers only |
+| `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/doh-vpn-proxy-bypass.txt` | ~16,000 | the above **plus VPNs, Tor and proxies**. Skip it if anyone at home needs a VPN |
+
+These lists include Cloudflare's `one.one.one.one`, the board's own DoT server, but that's
+fine. The board looks up its upstream directly, not through its own blocklist, so only your
+devices lose the ability to go around it.
+
+### Measure it
+
+Open **https://d3ward.github.io/toolz/adblock** on a device that uses the board, with the
+browser's own ad blocker turned off. It gives a score you can compare before and after
+changing lists.
 
 ## Using it
 
