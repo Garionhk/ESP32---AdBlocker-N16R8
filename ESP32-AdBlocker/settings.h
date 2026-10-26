@@ -50,7 +50,8 @@ struct Settings {
 
   // Blocklist sources, HOSTS or Adblock format, one URL per line (up to
   // BL_MAX_LISTS), and the local hour they are re-downloaded each day.
-  String   blocklistUrl = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts";
+  // Hagezi Multi PRO: ~210,000 domains, ~3.8 MB of the PSRAM arena.
+  String   blocklistUrl = "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt";
   uint8_t  refreshHour  = 3;
 
   // Blocking an entry also blocks its subdomains (ads.example.com for

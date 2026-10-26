@@ -24,7 +24,7 @@ $ dig @192.168.0.254 example.com +short
 
 | | |
 |---|---|
-| **Blocking** | up to 4 merged blocklists (HOSTS, Adblock `\|\|domain^` or plain), about 190,000 domains. Subdomains are blocked with their parent, CNAME-cloaked trackers are caught, and your own block / allow list wins over the lists |
+| **Blocking** | up to 4 merged blocklists (HOSTS, Adblock `\|\|domain^` or plain), about 250,000 domains; the default Hagezi Pro list is 210,000. Subdomains are blocked with their parent, CNAME-cloaked trackers are caught, and your own block / allow list wins over the lists |
 | **Resolving** | DNS-over-TLS to Cloudflare (or Quad9 / Google), falling back to plain DNS. Full relay of every record type, a 768-entry cache that honours TTLs, up to 64 lookups in flight, DNS over TCP, IPv4 and IPv6 |
 | **Local network** | local names (`printer`, `nas.lan`, private reverse lookups) go to your router; a Local DNS page for your own `IP name` records |
 | **Bypass guards** | switches off Firefox's DNS-over-HTTPS and iCloud Private Relay automatically, using their canary names |
@@ -41,7 +41,7 @@ It covers what most households use Pi-hole for. What it can't match is scale.
 | | Pi-hole on a Raspberry Pi | This board |
 |---|---|---|
 | Cost / power | a Pi, an SD card, ~3 W | a ~$10 board, under 1 W, no SD card |
-| Blocklist size | millions of domains | ~190,000 |
+| Blocklist size | millions of domains | ~250,000 |
 | Regex rules | yes | no: exact names and subdomains |
 | Query history | long-term database | last 6,000 queries, cleared on reboot; hourly totals kept for a week |
 | DHCP server, DNSSEC validation | yes | no (the router does DHCP; Cloudflare validates) |
@@ -64,8 +64,8 @@ Download from the [latest release](https://github.com/Garionhk/ESP32---AdBlocker
 
 | File | Use it when |
 |---|---|
-| `adblocker-v1.0.0-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
-| `adblocker-v1.0.0-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
+| `adblocker-v1.0.1-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
+| `adblocker-v1.0.1-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
 | `…-app.bin` / `…-usbcdc-app.bin` | updating a board that already runs it. Keeps settings and the blocklist |
 
 The two builds differ only in which port the serial log comes out of. Both block the same.
@@ -77,13 +77,13 @@ pip install esptool
 First install (writes the whole flash):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.0-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.1-esp32s3-n16r8.bin
 ```
 
 Update (application only):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.0-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.1-esp32s3-n16r8-app.bin
 ```
 
 To build it yourself instead, see [Building](#building).
@@ -129,8 +129,8 @@ heap 109 KB, psram 136 KB free
 ```
 
 On a DHCP address it also shows the MAC to reserve in your router. On the first boot the
-blocklist downloads in the background (about 10 seconds for StevenBlack's list), and a second
-message reports the result.
+blocklist downloads in the background (about 20 seconds for the default Hagezi Pro list), and a
+second message reports the result.
 
 ### 4. Point your network at it
 
@@ -232,7 +232,7 @@ report always says which path is in use.
 
 - The TLS connection is kept open with a tiny query every 7 s, because Cloudflare drops idle
   connections after about 10 s.
-- DoT steps aside for the ~10 s daily blocklist download: the chip's internal RAM only fits
+- DoT steps aside for the ~20 s daily blocklist download: the chip's internal RAM only fits
   so many TLS connections at once.
 - Replies too big for UDP are sent with the truncated flag, and the client retries over TCP.
 
@@ -242,17 +242,24 @@ Each list can be HOSTS (`0.0.0.0 ads.example.com`), Adblock (`||ads.example.com^
 name per line. Adblock rules with options, paths, wildcards or `@@` exceptions are skipped,
 since DNS can't apply them.
 
-| List | URL |
-|---|---|
-| StevenBlack unified (default) | `https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts` |
-| StevenBlack + fakenews + gambling | `https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling/hosts` |
-| Hagezi Pro (Adblock) | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt` |
+| List | Size | URL |
+|---|---|---|
+| **Hagezi Multi PRO** (default) | 210,000, 3.8 MB | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt` |
+| Hagezi Multi NORMAL (gentler) | smaller | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/multi.txt` |
+| StevenBlack unified (conservative) | 53,000, 1.3 MB | `https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts` |
+| StevenBlack + fakenews + gambling | larger | `https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling/hosts` |
+
+The board has about 4.9 MB for names, roughly 250,000 domains at a typical 18 characters.
+Combined lists that need more are truncated, and the load message says `TRUNCATED`.
+
+**Upgrading from v1.0.0?** The default only applies to new installs and factory resets. A board
+that's already set up keeps its saved URL, so change it on the Settings page.
 
 - **Lists are fetched daily** at the refresh hour (03:00 by default), and at boot if the saved
   copy is over 24 h old.
 - **A download only replaces the list once the server has answered,** so an attempt with no
   internet changes nothing. A failure partway through restores the previous list from flash.
-- **Nothing is blocked while a download is sorting,** which takes about 10 seconds.
+- **Nothing is blocked while a download is sorting,** which takes about 20 seconds for Hagezi Pro.
 
 ### Daily reboot
 
@@ -337,4 +344,5 @@ The blocklist engine and the original DNS responder come from
 AGPL-3.0. This project is therefore released under the **[AGPL-3.0](LICENSE)** too. If you run
 a modified version as a network service, you must offer its source to its users.
 
-Default blocklist: [StevenBlack/hosts](https://github.com/StevenBlack/hosts).
+Default blocklist: [Hagezi DNS blocklists](https://github.com/hagezi/dns-blocklists). Also
+supported: [StevenBlack/hosts](https://github.com/StevenBlack/hosts).

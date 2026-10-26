@@ -3,7 +3,7 @@
 // Tunables. Credentials live in NVS (settings.cpp), not here.
 
 #define APP_NAME           "ESP32 AdBlocker"
-#define APP_VERSION        "1.0.0"
+#define APP_VERSION        "1.0.1"
 
 // ---- Blocklist ----------------------------------------------------------
 // Pointer table and domain arena both live in PSRAM. 400k pointers is 1.6 MB;

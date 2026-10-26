@@ -24,7 +24,7 @@ $ dig @192.168.0.254 example.com +short
 
 | | |
 |---|---|
-| **攔截** | 最多合併 4 份攔截清單（HOSTS、Adblock `\|\|domain^` 或純域名格式），約 190,000 個域名。子域名會隨上層域名一併攔截，能識破以 CNAME 隱藏的追蹤器，你自訂的攔截／放行清單優先於所有清單 |
+| **攔截** | 最多合併 4 份攔截清單（HOSTS、Adblock `\|\|domain^` 或純域名格式），約 250,000 個域名；預設的 Hagezi Pro 清單有 210,000 個。子域名會隨上層域名一併攔截，能識破以 CNAME 隱藏的追蹤器，你自訂的攔截／放行清單優先於所有清單 |
 | **解析** | 以 DNS-over-TLS 連接 Cloudflare（或 Quad9／Google），不可用時改用一般 DNS。完整轉發所有記錄類型，768 筆遵守 TTL 的快取，最多 64 個查詢同時進行，支援 TCP 上的 DNS、IPv4 及 IPv6 |
 | **區域網絡** | 區域名稱（`printer`、`nas.lan`、私人地址的反向查詢）交由路由器處理；另有「本地 DNS」頁面，可加入你自己的「IP 名稱」記錄 |
 | **防繞過** | 利用 Firefox DNS-over-HTTPS 和 iCloud 私密轉送的檢測域名，自動令這兩項功能停用 |
@@ -41,7 +41,7 @@ $ dig @192.168.0.254 example.com +short
 | | 樹莓派上的 Pi-hole | 這塊開發板 |
 |---|---|---|
 | 成本／耗電 | 一部樹莓派加 SD 卡，約 3 W | 約 10 美元的開發板，不足 1 W，無需 SD 卡 |
-| 攔截清單容量 | 數以百萬計的域名 | 約 190,000 個 |
+| 攔截清單容量 | 數以百萬計的域名 | 約 250,000 個 |
 | 正規表示式規則 | 有 | 沒有：只有完整域名及子域名 |
 | 查詢記錄 | 長期資料庫 | 最近 6,000 個查詢，重新啟動即清空；每小時統計保留一星期 |
 | DHCP 伺服器、DNSSEC 驗證 | 有 | 沒有（DHCP 由路由器負責；Cloudflare 會做驗證） |
@@ -64,8 +64,8 @@ $ dig @192.168.0.254 example.com +short
 
 | 檔案 | 適用情況 |
 |---|---|
-| `adblocker-v1.0.0-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
-| `adblocker-v1.0.0-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
+| `adblocker-v1.0.1-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
+| `adblocker-v1.0.1-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
 | `…-app.bin`／`…-usbcdc-app.bin` | 更新已在運行的開發板，保留設定及攔截清單 |
 
 兩個版本的分別只在序列埠記錄從哪個接口輸出，攔截功能完全一樣。
@@ -77,13 +77,13 @@ pip install esptool
 首次安裝（寫入整個快閃記憶體）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.0-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.1-esp32s3-n16r8.bin
 ```
 
 更新（只寫入應用程式）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.0-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.1-esp32s3-n16r8-app.bin
 ```
 
 如要自行編譯，請參閱[編譯](#編譯)。
@@ -129,7 +129,7 @@ heap 109 KB, psram 136 KB free
 ```
 
 使用 DHCP 地址時，訊息還會列出 MAC 地址，方便你在路由器設定保留。首次開機時，攔截清單會在
-背景下載（StevenBlack 清單約需 10 秒），完成後會再收到一則訊息。
+背景下載（預設的 Hagezi Pro 清單約需 20 秒），完成後會再收到一則訊息。
 
 ### 4. 把網絡指向它
 
@@ -226,7 +226,7 @@ DNS 始終可用，只是這些查詢沒有加密。狀態報告會清楚顯示�
 
 - 因為 Cloudflare 會在連線閒置約 10 秒後中斷，開發板每 7 秒發送一個極小的查詢來保持 TLS
   連線。
-- 每日約 10 秒的攔截清單下載期間，DoT 會暫時讓路：晶片的內部記憶體同時只容得下幾條 TLS 連線。
+- 每日約 20 秒的攔截清單下載期間，DoT 會暫時讓路：晶片的內部記憶體同時只容得下幾條 TLS 連線。
 - UDP 容納不下的回覆會標記為截斷，用戶端隨即改用 TCP 重試。
 
 ### 攔截清單
@@ -235,16 +235,23 @@ DNS 始終可用，只是這些查詢沒有加密。狀態報告會清楚顯示�
 每行一個域名的格式。帶選項、路徑、萬用字元或 `@@` 例外的 Adblock 規則會被略過，因為 DNS 無法
 執行這些規則。
 
-| 清單 | 網址 |
-|---|---|
-| StevenBlack 綜合版（預設） | `https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts` |
-| StevenBlack + 假新聞 + 賭博 | `https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling/hosts` |
-| Hagezi Pro（Adblock） | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt` |
+| 清單 | 大小 | 網址 |
+|---|---|---|
+| **Hagezi Multi PRO**（預設） | 210,000 個，3.8 MB | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.txt` |
+| Hagezi Multi NORMAL（較寬鬆） | 較小 | `https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/multi.txt` |
+| StevenBlack 綜合版（較保守） | 53,000 個，1.3 MB | `https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts` |
+| StevenBlack + 假新聞 + 賭博 | 較大 | `https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling/hosts` |
+
+開發板約有 4.9 MB 空間存放域名，以一般 18 個字元計約可容納 250,000 個。合併後超出容量的清單會被
+截短，下載訊息會顯示 `TRUNCATED`。
+
+**由 v1.0.0 升級？** 新預設只適用於全新安裝及恢復原廠設定。已設定好的開發板會保留原本儲存的網址，
+請在設定頁自行更改。
 
 - **每日在更新時間下載清單**（預設 03:00）；如開機時已儲存的副本超過 24 小時，也會即時下載。
 - **伺服器回應後才會取代現有清單**，所以沒有互聯網時的下載嘗試不會影響任何東西。下載中途
   失敗會從快閃記憶體還原舊清單。
-- **下載後排序期間不會攔截**，約需 10 秒。
+- **下載後排序期間不會攔截**，Hagezi Pro 約需 20 秒。
 
 ### 每日重新啟動
 
@@ -326,4 +333,5 @@ DNS 解析，以及包括密語檢查在內的所有 ntfy 指令。
 AGPL-3.0 授權，因此本專案同樣以 **[AGPL-3.0](LICENSE)** 發佈。如果你把修改後的版本作為網絡
 服務運行，必須向其用戶提供原始碼。
 
-預設攔截清單：[StevenBlack/hosts](https://github.com/StevenBlack/hosts)。
+預設攔截清單：[Hagezi DNS blocklists](https://github.com/hagezi/dns-blocklists)。亦支援
+[StevenBlack/hosts](https://github.com/StevenBlack/hosts)。

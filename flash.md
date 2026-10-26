@@ -102,14 +102,14 @@ esptool --port /dev/cu.usbmodem101 erase-flash
 The simplest way to write is one file at `0x0`:
 
 ```bash
-esptool --port /dev/cu.usbmodem101 --baud 921600 write-flash 0x0 adblocker-v1.0.0-esp32s3-n16r8-usbcdc.bin
+esptool --port /dev/cu.usbmodem101 --baud 921600 write-flash 0x0 adblocker-v1.0.1-esp32s3-n16r8-usbcdc.bin
 ```
 
 To update a board that already runs it, write only the application. Settings and the
 blocklist stay:
 
 ```bash
-esptool --port /dev/cu.usbmodem101 --baud 921600 write-flash 0x10000 adblocker-v1.0.0-esp32s3-n16r8-usbcdc-app.bin
+esptool --port /dev/cu.usbmodem101 --baud 921600 write-flash 0x10000 adblocker-v1.0.1-esp32s3-n16r8-usbcdc-app.bin
 ```
 
 Faster, the four pieces at their offsets. On the S3 the bootloader goes at `0x0`:
