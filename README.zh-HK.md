@@ -30,7 +30,7 @@ $ dig @192.168.0.254 example.com +short
 | **防繞過** | 利用 Firefox DNS-over-HTTPS 和 iCloud 私密轉送的檢測域名，自動令這兩項功能停用 |
 | **可視化** | 網頁儀表板（24 小時圖表、最常攔截／放行的域名、最活躍裝置）、可篩選的查詢記錄（每行一鍵攔截／放行）、即時狀態頁 |
 | **手機控制** | 開機後透過 ntfy 發送 IP 和狀態，並支援以密語保護的指令：`status`、`top`、`check`、`block`、`unblock`、`reload`、`reboot` 等 |
-| **自我維護** | 按你設定的時間和時區每日重新啟動；每日重新下載攔截清單，重新啟動後一秒內從快閃記憶體還原；下載失敗每 5 分鐘重試 |
+| **自我維護** | 按你設定的時間和時區每日重新啟動；每日重新下載攔截清單，重新啟動後約 2 秒從快閃記憶體還原；下載失敗每 5 分鐘重試 |
 | **狀態燈** | 板載 WS2812 一眼看出設定中、攔截中、下載中、沒有互聯網或故障 |
 | **韌體不含任何密碼** | WiFi、ntfy 和密碼都在網頁設定入口輸入，並儲存於 NVS，所以同一個韌體檔案人人可用 |
 
@@ -60,12 +60,12 @@ $ dig @192.168.0.254 example.com +short
 
 ### 1. 燒錄
 
-從[最新發佈版本](https://github.com/Garionhk/ESP32---AdBlocker-N16R8/releases/latest)下載：
+從[最新發佈版本](https://github.com/Garionhk/ESP32-AdBlocker-N16R8/releases/latest)下載：
 
 | 檔案 | 適用情況 |
 |---|---|
-| `adblocker-v1.0.1-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
-| `adblocker-v1.0.1-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
+| `adblocker-v1.0.2-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
+| `adblocker-v1.0.2-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
 | `…-app.bin`／`…-usbcdc-app.bin` | 更新已在運行的開發板，保留設定及攔截清單 |
 
 兩個版本的分別只在序列埠記錄從哪個接口輸出，攔截功能完全一樣。
@@ -77,13 +77,13 @@ pip install esptool
 首次安裝（寫入整個快閃記憶體）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.1-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.2-esp32s3-n16r8.bin
 ```
 
 更新（只寫入應用程式）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.1-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.2-esp32s3-n16r8-app.bin
 ```
 
 如要自行編譯，請參閱[編譯](#編譯)。
@@ -286,6 +286,15 @@ DNS 始終可用，只是這些查詢沒有加密。狀態報告會清楚顯示�
 
 開發板約有 4.9 MB 空間存放域名，以一般 18 個字元計約可容納 250,000 個。合併後超出容量的清單會被
 截短，下載訊息會顯示 `TRUNCATED`。
+
+**Hagezi 清單需要子域名攔截**（預設開啟）。清單只列出 `g.doubleclick.net`，而不是逐一列出
+`pubads.g.doubleclick.net`、`securepubads.g.doubleclick.net` 等；如關閉子域名攔截，大部分 Google
+廣告主機都會漏網。
+
+**Hagezi 刻意不攔 Google 的點擊轉址。** 按下 Google 搜尋的贊助結果，或電郵中的廣告連結時，會經過
+`ad.doubleclick.net` 及 `googleadservices.com`，攔截它們會令這些連結失效；廣告本身仍然不會載入。
+StevenBlack 則會攔截。如仍想攔截：發送 `<密語> block ad.doubleclick.net`，再發送
+`block googleadservices.com`。
 
 **由 v1.0.0 升級？** 新預設只適用於全新安裝及恢復原廠設定。已設定好的開發板會保留原本儲存的網址，
 請在設定頁自行更改。

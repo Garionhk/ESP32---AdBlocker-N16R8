@@ -285,11 +285,27 @@ struct SnapHdr {
   uint32_t items;
   uint32_t rawLen;     // arena bytes the entries decode to
   int64_t  loadedAt;   // epoch of the download it came from
+  uint32_t urlsHash;   // which blocklist URLs it was built from
 };
 #pragma pack(pop)
 
+int listUrls(String urls[BL_MAX_LISTS]);
+
+// FNV-1a over the configured URLs, one per line. A snapshot built from other
+// URLs is the wrong list, however fresh it is.
+uint32_t urlsHash() {
+  String urls[BL_MAX_LISTS];
+  int n = listUrls(urls);
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < n; i++) {
+    for (unsigned int k = 0; k < urls[i].length(); k++) h = (h ^ (uint8_t)urls[i][k]) * 16777619u;
+    h = (h ^ '\n') * 16777619u;
+  }
+  return h;
+}
+
 const uint32_t SNAP_MAGIC = 0x31424441;   // "ADB1"
-const uint16_t SNAP_VER   = 1;
+const uint16_t SNAP_VER   = 2;   // 2: records the source URLs
 const char*    SNAP_TMP   = BL_SNAPSHOT_PATH ".tmp";
 
 uint32_t crc32Update(uint32_t c, const uint8_t* d, size_t n) {
@@ -320,7 +336,7 @@ void saveSnapshot() {
   }
 
   uint32_t t0 = millis();
-  SnapHdr h = {SNAP_MAGIC, SNAP_VER, count, rawLen, (int64_t)loadedAt};
+  SnapHdr h = {SNAP_MAGIC, SNAP_VER, count, rawLen, (int64_t)loadedAt, urlsHash()};
   bool ok = f.write((const uint8_t*)&h, sizeof(h)) == sizeof(h);
 
   uint32_t crc = 0xFFFFFFFFu;
@@ -378,7 +394,9 @@ void saveSnapshot() {
 }
 
 // Caller owns the table. Leaves it empty on any failure.
-bool restoreSnapshot() {
+// `anyUrls` accepts a snapshot from other URLs: after a failed download the
+// previous list beats no list at all. At boot it must match.
+bool restoreSnapshot(bool anyUrls) {
   File f = LittleFS.open(BL_SNAPSHOT_PATH, FILE_READ);
   if (!f) {
     Serial.println("[blocklist] no snapshot in flash yet");
@@ -392,6 +410,7 @@ bool restoreSnapshot() {
   else if (h.magic != SNAP_MAGIC || h.ver != SNAP_VER) why = "unknown format";
   else if (h.items > BL_MAX_DOMAINS) why = "too many entries";
   else if (h.rawLen > arenaSize) why = "larger than PSRAM arena";
+  else if (!anyUrls && h.urlsHash != urlsHash()) why = "built from different blocklist URLs";
   if (why) {
     Serial.printf("[blocklist] snapshot rejected: %s\n", why);
     f.close();
@@ -700,7 +719,7 @@ void runReload(const char* reason) {
   // Failed mid-transfer. The old list was wiped to make room, so bring it
   // back from flash.
   resetStorage();
-  if (restoreSnapshot()) {
+  if (restoreSnapshot(/*anyUrls=*/true)) {
     applyCustom();
     setState(State::Ready);
     finish(r, why + "Still blocking with the previous " + withCommas(count) +
@@ -761,7 +780,7 @@ bool begin() {
     localdns::begin();
   }
 
-  if (restoreSnapshot()) {
+  if (restoreSnapshot(/*anyUrls=*/false)) {
     applyCustom();
     state = State::Ready;
   }

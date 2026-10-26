@@ -30,7 +30,7 @@ $ dig @192.168.0.254 example.com +short
 | **Bypass guards** | switches off Firefox's DNS-over-HTTPS and iCloud Private Relay automatically, using their canary names |
 | **Visibility** | web dashboard (24-hour chart, top blocked / allowed / clients), query log with filters and one-click block/allow, live status page |
 | **Phone control** | ntfy messages with IP and status after boot, plus passphrase-protected commands: `status`, `top`, `check`, `block`, `unblock`, `reload`, `reboot` … |
-| **Self-care** | daily reboot at a time and timezone you choose; blocklist re-downloaded daily and restored from flash in under a second after a reboot; failed downloads retried every 5 minutes |
+| **Self-care** | daily reboot at a time and timezone you choose; blocklist re-downloaded daily and restored from flash in about 2 seconds after a reboot; failed downloads retried every 5 minutes |
 | **Status LED** | the on-board WS2812 shows setup, blocking, downloading, no internet and failure at a glance |
 | **No secrets in the binary** | WiFi, ntfy and passwords are set from a captive-portal web page and kept in NVS, so the same firmware file works for everyone |
 
@@ -60,12 +60,12 @@ It covers what most households use Pi-hole for. What it can't match is scale.
 
 ### 1. Flash
 
-Download from the [latest release](https://github.com/Garionhk/ESP32---AdBlocker-N16R8/releases/latest):
+Download from the [latest release](https://github.com/Garionhk/ESP32-AdBlocker-N16R8/releases/latest):
 
 | File | Use it when |
 |---|---|
-| `adblocker-v1.0.1-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
-| `adblocker-v1.0.1-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
+| `adblocker-v1.0.2-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
+| `adblocker-v1.0.2-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
 | `…-app.bin` / `…-usbcdc-app.bin` | updating a board that already runs it. Keeps settings and the blocklist |
 
 The two builds differ only in which port the serial log comes out of. Both block the same.
@@ -77,13 +77,13 @@ pip install esptool
 First install (writes the whole flash):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.1-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.2-esp32s3-n16r8.bin
 ```
 
 Update (application only):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.1-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.2-esp32s3-n16r8-app.bin
 ```
 
 To build it yourself instead, see [Building](#building).
@@ -297,6 +297,16 @@ since DNS can't apply them.
 
 The board has about 4.9 MB for names, roughly 250,000 domains at a typical 18 characters.
 Combined lists that need more are truncated, and the load message says `TRUNCATED`.
+
+**Hagezi lists need subdomain matching** (on by default). They list
+`g.doubleclick.net`, not each of `pubads.g.doubleclick.net`, `securepubads.g.doubleclick.net` …
+With matching off, most of Google's ad hosts would get through.
+
+**Google click-through links are left open by Hagezi on purpose.** `ad.doubleclick.net` and
+`googleadservices.com` are what you pass through when you *tap* a sponsored Google result or an
+ad link in an email, so blocking them breaks those links. The ads themselves still don't load.
+StevenBlack does block them. To block them anyway:
+`<passphrase> block ad.doubleclick.net`, then `block googleadservices.com`.
 
 **Upgrading from v1.0.0?** The default only applies to new installs and factory resets. A board
 that's already set up keeps its saved URL, so change it on the Settings page.
