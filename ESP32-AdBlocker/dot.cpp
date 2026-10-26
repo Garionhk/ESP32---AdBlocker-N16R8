@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include <NetworkClientSecure.h>
 #include <WiFi.h>
-#include <lwip/sockets.h>
+#include <freertos/idf_additions.h>
 
 #include "config.h"
 #include "dnsmsg.h"
 #include "dot.h"
 #include "settings.h"
+#include "sinkhole.h"
 
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[]   asm("_binary_x509_crt_bundle_end");
@@ -20,9 +21,13 @@ volatile bool pausedFlag = false;
 volatile uint32_t lastConnectMs = 0;
 volatile int  failures = 0;
 
-int udp = -1;
-struct sockaddr_in replyTo;   // the sinkhole's upstream socket
-bool haveReplyTo = false;
+// Queries from the sinkhole, waiting to go out on the TLS stream. In PSRAM:
+// each slot holds a whole packet.
+struct Query {
+  uint16_t len;
+  uint8_t  data[DNS_MAX_PACKET];
+};
+QueueHandle_t queries = nullptr;
 
 // Reads exactly n bytes from the TLS stream, or gives up after timeoutMs.
 bool readExact(NetworkClientSecure& c, uint8_t* buf, size_t n, uint32_t timeoutMs) {
@@ -97,18 +102,13 @@ void proxyTask(void*) {
       }
     }
 
-    // Queries from the sinkhole. Only it can reach the loopback port.
-    for (int i = 0; i < 8; i++) {
-      struct sockaddr_in from;
-      socklen_t fl = sizeof(from);
-      int n = recvfrom(udp, buf, sizeof(buf), MSG_DONTWAIT, (struct sockaddr*)&from, &fl);
-      if (n <= 0) break;
-      if (from.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) continue;
-      replyTo = from;
-      haveReplyTo = true;
-      if (!connectedFlag) continue;   // sinkhole times out and falls back
+    // Queries from the sinkhole. One that can't go out is dropped; the
+    // sinkhole times out and moves on to the plain servers.
+    static Query q;
+    for (int i = 0; i < 16 && xQueueReceive(queries, &q, 0) == pdTRUE; i++) {
+      if (!connectedFlag) continue;
       framesOut++;
-      if (!writeFrame(*tls, buf, n)) {
+      if (!writeFrame(*tls, q.data, q.len)) {
         Serial.println("[dot] write failed");
         tls->stop();
         connectedFlag = false;
@@ -131,7 +131,7 @@ void proxyTask(void*) {
       lastActivity = millis();
       framesIn++;
       if (len >= dnsmsg::HEADER && dnsmsg::id(buf) == keepaliveId && keepaliveId) continue;
-      if (haveReplyTo) sendto(udp, buf, len, 0, (struct sockaddr*)&replyTo, sizeof(replyTo));
+      sinkhole::fromDot(buf, len);
     }
 
     // Servers hang up idle connections. A tiny query now and then keeps it
@@ -152,18 +152,20 @@ void proxyTask(void*) {
 
 void begin() {
   if (task || !g_settings.dotEnabled) return;
-  udp = socket(AF_INET, SOCK_DGRAM, 0);
-  struct sockaddr_in a = {};
-  a.sin_family = AF_INET;
-  a.sin_port = htons(DOT_PROXY_PORT);
-  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (udp < 0 || bind(udp, (struct sockaddr*)&a, sizeof(a)) < 0) {
-    Serial.println("[dot] loopback bind failed -- DoT off");
-    if (udp >= 0) close(udp);
-    udp = -1;
+  queries = xQueueCreateWithCaps(DOT_QUEUE_SLOTS, sizeof(Query), MALLOC_CAP_SPIRAM);
+  if (!queries) {
+    Serial.println("[dot] no memory for the query queue -- DoT off");
     return;
   }
   xTaskCreatePinnedToCore(proxyTask, "dot", DOT_TASK_STACK, nullptr, 2, &task, 1);
+}
+
+bool submit(const uint8_t* data, int len) {
+  if (!queries || !connectedFlag || pausedFlag || len > DNS_MAX_PACKET) return false;
+  static Query q;   // only the DNS task calls this
+  q.len = (uint16_t)len;
+  memcpy(q.data, data, len);
+  return xQueueSend(queries, &q, 0) == pdTRUE;
 }
 
 bool ready() { return connectedFlag && !pausedFlag; }

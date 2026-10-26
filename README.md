@@ -64,8 +64,8 @@ Download from the [latest release](https://github.com/Garionhk/ESP32-AdBlocker-N
 
 | File | Use it when |
 |---|---|
-| `adblocker-v1.0.2-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
-| `adblocker-v1.0.2-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
+| `adblocker-v1.0.3-esp32s3-n16r8.bin` | first install, connected through the board's **UART** port or a USB-serial adapter (CP2102, CH343, FTDI) |
+| `adblocker-v1.0.3-esp32s3-n16r8-usbcdc.bin` | first install, connected through the board's **native USB** port |
 | `…-app.bin` / `…-usbcdc-app.bin` | updating a board that already runs it. Keeps settings and the blocklist |
 
 The two builds differ only in which port the serial log comes out of. Both block the same.
@@ -77,13 +77,13 @@ pip install esptool
 First install (writes the whole flash):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.2-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.3-esp32s3-n16r8.bin
 ```
 
 Update (application only):
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.2-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.3-esp32s3-n16r8-app.bin
 ```
 
 To build it yourself instead, see [Building](#building).
@@ -198,6 +198,47 @@ devices lose the ability to go around it.
 Open **https://d3ward.github.io/toolz/adblock** on a device that uses the board, with the
 browser's own ad blocker turned off. It gives a score you can compare before and after
 changing lists.
+
+## Capacity
+
+**About 1–10 people, or 50–80 devices, without noticeable delays.** A household averages under
+one query a second, with page-load bursts of 10–30 lookups at once; the board has a wide margin
+on both. These numbers come from `tools/dnsload.py` run against the test board over WiFi, with
+Hagezi Pro loaded and DNS-over-TLS on (v1.0.3):
+
+| Load | Clean (no loss) up to | Beyond that |
+|---|---|---|
+| Burst, all arriving at once | **20 queries** (blocked, cached and upstream alike) | 50 at once: 6–24% lost; 100+: 30–50% |
+| Steady, blocked names | **800 / s** | 1,600 / s: 34% lost |
+| Steady, cached names | **400 / s** | 800 / s: 4% lost |
+| Steady, upstream lookups | **400 / s** without loss | above ~200 / s, about 5% fall back to plain DNS after 0.9 s |
+
+Typical answer times: **7 ms** blocked or cached, **20–25 ms** upstream.
+
+Where the limits come from:
+- **Bursts above ~50 at once** are lost in the ESP32 core's own network buffers (its 32-deep
+  input queue and the WiFi driver's receive buffers). They're compiled into the core, so this
+  firmware can't raise them. A single home rarely sends that many at the same instant.
+- **DNS-over-TLS** is one encrypted connection. Above ~200 new lookups a second it can't keep
+  up, and the overflow is answered over plain DNS a moment later.
+
+Versions before 1.0.3 received through ordinary sockets, whose queue holds only **6 packets**.
+There, a burst of 10 lost 4 and a burst of 20 lost 14, so a busy page could stall for a second
+while lookups retried. Upgrade if you're on 1.0.2 or earlier.
+
+**Measure your own** (it sends real queries; use it only on your own network):
+
+```bash
+python3 tools/dnsload.py 192.168.0.254 burst blocked
+```
+
+```bash
+python3 tools/dnsload.py 192.168.0.254 rate cached --rates 100,200,400
+```
+
+`burst` sends N queries back to back; `rate` holds a steady rate for 5 s. `blocked`, `cached`
+and `uncached` (fresh names that must go upstream) choose what's being asked. Run the same burst
+against your router for comparison.
 
 ## Using it
 
@@ -392,6 +433,7 @@ DNS parsing, and every ntfy command, including the passphrase gate.
 | `scheduler.cpp`, `schedule.h` | daily reboot, daily refresh, reset reason |
 | `led.cpp`, `ledstate.h` | status LED |
 | `settings.cpp`, `config.h` | settings in NVS; tunables |
+| `tools/dnsload.py` | load tester (runs on your computer) |
 
 ## Credits and license
 

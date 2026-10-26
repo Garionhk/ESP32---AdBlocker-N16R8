@@ -3,7 +3,7 @@
 // Tunables. Credentials live in NVS (settings.cpp), not here.
 
 #define APP_NAME           "ESP32 AdBlocker"
-#define APP_VERSION        "1.0.2"
+#define APP_VERSION        "1.0.3"
 
 // ---- Blocklist ----------------------------------------------------------
 // Pointer table and domain arena both live in PSRAM. 400k pointers is 1.6 MB;
@@ -36,6 +36,7 @@
 #define DNS_BLOCKED_TTL_S     10      // short, so an unblock takes effect fast
 #define DNS_LOCAL_TTL_S       300     // localhost and local records
 #define DNS_MAX_PACKET        1500    // client or upstream, UDP
+#define DNS_RX_SLOTS          128     // receive pool, ~190 KB PSRAM; a socket would hold 6
 #define DNS_TASK_STACK        (8 * 1024)
 #define DNS_TASK_PRIORITY     3
 #define DNS_TCP_CLIENTS       3       // concurrent TCP connections served
@@ -44,9 +45,9 @@
 #define DNS_LOCAL_PATH        "/hosts.txt"
 
 // ---- DNS-over-TLS -------------------------------------------------------
-// A local proxy on the loopback interface turns the sinkhole's UDP queries
-// into one long-lived TLS stream, so the sinkhole itself never blocks on TLS.
-#define DOT_PROXY_PORT        5300
+// A proxy task turns the sinkhole's queries into one long-lived TLS stream,
+// so the sinkhole itself never blocks on TLS.
+#define DOT_QUEUE_SLOTS       48      // queries waiting for the stream, PSRAM
 #define DOT_MIN_HEAP          90000   // bytes free before a TLS connect is tried
 #define DOT_KEEPALIVE_MS      7000UL  // Cloudflare drops DoT idle for ~10 s
 #define DOT_RECONNECT_MS      10000UL

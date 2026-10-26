@@ -64,8 +64,8 @@ $ dig @192.168.0.254 example.com +short
 
 | 檔案 | 適用情況 |
 |---|---|
-| `adblocker-v1.0.2-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
-| `adblocker-v1.0.2-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
+| `adblocker-v1.0.3-esp32s3-n16r8.bin` | 首次安裝，經開發板的 **UART** 接口或 USB 轉序列埠轉接器（CP2102、CH343、FTDI）連接 |
+| `adblocker-v1.0.3-esp32s3-n16r8-usbcdc.bin` | 首次安裝，經開發板的**原生 USB** 接口連接 |
 | `…-app.bin`／`…-usbcdc-app.bin` | 更新已在運行的開發板，保留設定及攔截清單 |
 
 兩個版本的分別只在序列埠記錄從哪個接口輸出，攔截功能完全一樣。
@@ -77,13 +77,13 @@ pip install esptool
 首次安裝（寫入整個快閃記憶體）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.2-esp32s3-n16r8.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x0 adblocker-v1.0.3-esp32s3-n16r8.bin
 ```
 
 更新（只寫入應用程式）：
 
 ```bash
-esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.2-esp32s3-n16r8-app.bin
+esptool --port /dev/cu.usbserial-XXXX --baud 921600 write-flash 0x10000 adblocker-v1.0.3-esp32s3-n16r8-app.bin
 ```
 
 如要自行編譯，請參閱[編譯](#編譯)。
@@ -192,6 +192,42 @@ dig @192.168.0.254 doubleclick.net
 
 在使用開發板的裝置上開啟 **https://d3ward.github.io/toolz/adblock**（先關閉瀏覽器本身的廣告
 攔截），會得出一個分數，方便比較更換清單前後的分別。
+
+## 容量
+
+**約 1–10 人，或 50–80 部裝置，不會感覺到延遲。** 一般家庭平均每秒少於一個查詢，載入網頁時則會
+一次過發出 10–30 個查詢；開發板在兩方面都有充足餘裕。以下數字來自在測試開發板上經 WiFi 執行的
+`tools/dnsload.py`，已載入 Hagezi Pro 並開啟 DNS-over-TLS（v1.0.3）：
+
+| 負載 | 完全不遺失直至 | 超出之後 |
+|---|---|---|
+| 突發，全部同時到達 | **20 個查詢**（已攔截、已快取及上游皆然） | 同時 50 個：遺失 6–24%；100 個以上：30–50% |
+| 持續，已攔截名稱 | **每秒 800 個** | 每秒 1,600 個：遺失 34% |
+| 持續，已快取名稱 | **每秒 400 個** | 每秒 800 個：遺失 4% |
+| 持續，上游查詢 | **每秒 400 個**不遺失 | 每秒約 200 個以上時，約 5% 會在 0.9 秒後改用一般 DNS |
+
+一般回應時間：已攔截或已快取約 **7 毫秒**，上游查詢約 **20–25 毫秒**。
+
+限制來源：
+- **同時超過約 50 個的突發**，會在 ESP32 核心本身的網絡緩衝區（32 格的輸入佇列及 WiFi 驅動程式
+  的接收緩衝區）中遺失。這些已編譯在核心內，本韌體無法加大。單一家庭很少會在同一瞬間發出這麼多查詢。
+- **DNS-over-TLS** 只有一條加密連線。每秒超過約 200 個新查詢時會跟不上，多出的會稍後改用一般 DNS 回應。
+
+1.0.3 之前的版本使用一般 socket 接收，其佇列只容得下 **6 個封包**：同時 10 個會遺失 4 個，20 個會
+遺失 14 個，繁忙的網頁可能因查詢要重試而停頓約一秒。如仍在使用 1.0.2 或更早版本，請升級。
+
+**自行測量**（會發送真實查詢，只可在你自己的網絡上使用）：
+
+```bash
+python3 tools/dnsload.py 192.168.0.254 burst blocked
+```
+
+```bash
+python3 tools/dnsload.py 192.168.0.254 rate cached --rates 100,200,400
+```
+
+`burst` 會連續發送 N 個查詢；`rate` 會維持穩定速率 5 秒。`blocked`、`cached` 及 `uncached`
+（必須經上游查詢的全新名稱）決定查詢的內容。可對路由器執行同樣的突發測試作比較。
 
 ## 使用方法
 
@@ -376,6 +412,7 @@ DNS 解析，以及包括密語檢查在內的所有 ntfy 指令。
 | `scheduler.cpp`、`schedule.h` | 每日重新啟動、每日更新、重新啟動原因 |
 | `led.cpp`、`ledstate.h` | 狀態燈 |
 | `settings.cpp`、`config.h` | NVS 中的設定；可調參數 |
+| `tools/dnsload.py` | 負載測試工具（在你的電腦上執行） |
 
 ## 鳴謝及授權
 

@@ -26,6 +26,7 @@ struct Stats {
   uint32_t failed;     // no upstream answered
   uint32_t inFlight;   // waiting on upstream right now
   uint32_t tcp;        // queries that came over TCP
+  uint32_t dropped;    // packets that arrived with the receive pool full
 };
 
 // Allocates the pending-query table and the cache in PSRAM. Call before the
@@ -47,6 +48,10 @@ String recentBlocked();
 // Synchronous upstream A lookup, used to reject typos before adding a custom
 // block. Not for the DNS tasks' own use.
 bool resolves(const char* host);
+
+// A reply from the DoT proxy, queued for the DNS task like any other
+// upstream reply. Returns false if the receive pool is full.
+bool fromDot(const uint8_t* data, int len);
 
 // Where allowed lookups are going right now, for the status report.
 String upstreamStatus();

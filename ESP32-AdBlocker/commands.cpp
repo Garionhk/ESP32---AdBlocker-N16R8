@@ -91,6 +91,7 @@ String queriesLine() {
   if (d.queries > 0) out += " (" + String((unsigned long)(d.blocked * 100ULL / d.queries)) + "%)";
   out += ", cached " + withCommas(d.cached);
   if (d.failed > 0) out += ", upstream failures " + withCommas(d.failed);
+  if (d.dropped > 0) out += ", dropped (queue full) " + withCommas(d.dropped);
   return out;
 }
 

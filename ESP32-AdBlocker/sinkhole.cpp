@@ -4,14 +4,24 @@
 // s60sc 2026). The block decision and the localhost rule are theirs; the
 // relay, the cache, parallel upstream lookups, TCP and IPv6 are new.
 //
-// One UDP task owns the client sockets and one upstream socket and never
-// blocks: a query is either answered on the spot or sent upstream and
-// remembered in a pending table, and the reply is matched back by ID. A
-// second task serves the rare client that asks over TCP.
+// UDP does not use sockets. A socket's receive queue holds 6 packets
+// (CONFIG_LWIP_UDP_RECVMBOX_SIZE, fixed in the prebuilt core), so a burst of
+// 10 queries -- one web page -- lost 4. Instead lwIP's raw UDP API hands each
+// packet straight to a callback, which copies it into a PSRAM pool and queues
+// it; the pool and queue are as deep as DNS_RX_SLOTS. Replies go out the same
+// way, under the lwIP core lock.
+//
+// One task drains that queue and never blocks: a query is either answered on
+// the spot or sent upstream and remembered in a pending table, and the reply
+// is matched back by ID. DoT queries and replies travel through queues too. A
+// second task serves the rare client that asks over TCP, with sockets.
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <lwip/pbuf.h>
 #include <lwip/sockets.h>
+#include <lwip/tcpip.h>
+#include <lwip/udp.h>
 
 #include "blocklist.h"
 #include "config.h"
@@ -56,9 +66,89 @@ struct Pending {
 
 Pending* pend = nullptr;
 
-int udp4 = -1, udp6 = -1, up = -1;
+// ---- receive pool ---------------------------------------------------------
+
+enum Source : uint8_t { SRC_CLIENT, SRC_UPSTREAM, SRC_DOT };
+
+struct Packet {
+  uint8_t   src;
+  uint16_t  len;
+  ip_addr_t addr;   // client, or the upstream server it came from
+  uint16_t  port;
+  uint8_t   data[DNS_MAX_PACKET];
+};
+
+Packet*       pool    = nullptr;
+QueueHandle_t freeQ   = nullptr;   // slot indexes ready for the network stack
+QueueHandle_t workQ   = nullptr;   // slot indexes waiting for the DNS task
+udp_pcb*      clientPcb = nullptr; // :53
+udp_pcb*      upPcb     = nullptr; // ephemeral, for upstream servers
+volatile uint32_t dropped = 0;     // arrived with the pool full
+
 int tcp4 = -1, tcp6 = -1;
 bool started = false;
+
+// Runs in the lwIP thread for every packet. Copy and queue; nothing else.
+void onRaw(void* arg, udp_pcb*, pbuf* p, const ip_addr_t* addr, u16_t port) {
+  uint8_t idx;
+  if (p->tot_len <= DNS_MAX_PACKET && xQueueReceive(freeQ, &idx, 0) == pdTRUE) {
+    Packet& k = pool[idx];
+    k.src  = (uint8_t)(uintptr_t)arg;
+    k.len  = pbuf_copy_partial(p, k.data, p->tot_len, 0);
+    ip_addr_copy(k.addr, *addr);
+    k.port = port;
+    if (xQueueSend(workQ, &idx, 0) != pdTRUE) xQueueSend(freeQ, &idx, 0);
+  } else {
+    dropped = dropped + 1;
+  }
+  pbuf_free(p);
+}
+
+bool rawSend(udp_pcb* pcb, const ip_addr_t& to, uint16_t port, const uint8_t* data, int len) {
+  if (!pcb || len <= 0) return false;
+  LOCK_TCPIP_CORE();
+  pbuf* p = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+  err_t e = ERR_MEM;
+  if (p) {
+    memcpy(p->payload, data, len);
+    e = udp_sendto(pcb, p, &to, port);
+    pbuf_free(p);
+  }
+  UNLOCK_TCPIP_CORE();
+  return e == ERR_OK;
+}
+
+// The rest of the file speaks sockaddr (TCP, logging); convert at the edges.
+void toSockaddr(const ip_addr_t& a, uint16_t port, struct sockaddr_storage& out, socklen_t& len) {
+  memset(&out, 0, sizeof(out));
+  if (IP_IS_V6(&a)) {
+    struct sockaddr_in6* s6 = (struct sockaddr_in6*)&out;
+    s6->sin6_family = AF_INET6;
+    s6->sin6_port = htons(port);
+    memcpy(&s6->sin6_addr, ip_2_ip6(&a)->addr, 16);
+    len = sizeof(*s6);
+  } else {
+    struct sockaddr_in* s4 = (struct sockaddr_in*)&out;
+    s4->sin_family = AF_INET;
+    s4->sin_port = htons(port);
+    s4->sin_addr.s_addr = ip4_addr_get_u32(ip_2_ip4(&a));
+    len = sizeof(*s4);
+  }
+}
+
+void fromSockaddr(const struct sockaddr_storage& in, ip_addr_t& a, uint16_t& port) {
+  if (in.ss_family == AF_INET6) {
+    const struct sockaddr_in6* s6 = (const struct sockaddr_in6*)&in;
+    IP_SET_TYPE_VAL(a, IPADDR_TYPE_V6);
+    memcpy(ip_2_ip6(&a)->addr, &s6->sin6_addr, 16);
+    ip6_addr_clear_zone(ip_2_ip6(&a));
+    port = ntohs(s6->sin6_port);
+  } else {
+    const struct sockaddr_in* s4 = (const struct sockaddr_in*)&in;
+    ip_addr_set_ip4_u32_val(a, s4->sin_addr.s_addr);
+    port = ntohs(s4->sin_port);
+  }
+}
 
 volatile uint32_t routerIp = 0;   // network byte order
 uint32_t dns1Ip = 0, dns2Ip = 0;
@@ -129,9 +219,7 @@ bool serverAddr(Route r, struct sockaddr_in& out) {
   out.sin_port = htons(DNS_PORT);
   switch (r) {
     case R_DOT:
-      out.sin_port = htons(DOT_PROXY_PORT);
-      out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      return true;
+      return false;   // not a network address: queries go through dot::submit()
     case R_DNS1:   out.sin_addr.s_addr = dns1Ip; break;
     case R_DNS2:   out.sin_addr.s_addr = dns2Ip; break;
     case R_ROUTER: out.sin_addr.s_addr = routerIp; break;
@@ -292,7 +380,10 @@ void sendUdp(const Client& c, uint8_t* reply, int len, uint16_t limit) {
     dnsmsg::wr16(reply + 8, 0);
     dnsmsg::wr16(reply + 10, 0);
   }
-  sendto(c.fd, reply, len, 0, (const struct sockaddr*)&c.addr, c.len);
+  ip_addr_t to;
+  uint16_t port;
+  fromSockaddr(c.addr, to, port);
+  rawSend(clientPcb, to, port, reply, len);
 }
 
 Pending* allocPending() {
@@ -327,21 +418,31 @@ void failPending(Pending& p) {
 // left.
 void sendNext(Pending& p) {
   while (p.at < p.nroutes) {
-    struct sockaddr_in to;
-    if (serverAddr((Route)p.routes[p.at], to)) {
-      dnsmsg::setId(p.query, p.upId);
-      if (sendto(up, p.query, p.qlen, 0, (struct sockaddr*)&to, sizeof(to)) == p.qlen) {
-        p.sentMs = millis();
-        return;
+    Route r = (Route)p.routes[p.at];
+    dnsmsg::setId(p.query, p.upId);
+    bool sent = false;
+    if (r == R_DOT) {
+      sent = dot::submit(p.query, p.qlen);
+    } else {
+      struct sockaddr_in to;
+      if (serverAddr(r, to)) {
+        ip_addr_t a;
+        ip_addr_set_ip4_u32_val(a, to.sin_addr.s_addr);
+        sent = rawSend(upPcb, a, DNS_PORT, p.query, p.qlen);
       }
+    }
+    if (sent) {
+      p.sentMs = millis();
+      return;
     }
     p.at++;
   }
   failPending(p);
 }
 
-void onClientQuery(int fd, uint8_t* buf, int len, const struct sockaddr_storage& from,
-                   socklen_t fromLen) {
+void onClientQuery(Packet& k) {
+  uint8_t* buf = k.data;
+  int len = k.len;
   Question qq;
   if (!dnsmsg::parseQuery(buf, len, qq)) {
     // Answer FORMERR to anything that looks like a query; drop the rest.
@@ -351,13 +452,15 @@ void onClientQuery(int fd, uint8_t* buf, int len, const struct sockaddr_storage&
       out[2] = 0x80 | (buf[2] & 0x79);
       out[3] = 0x81;
       memset(out + 4, 0, 8);
-      sendto(fd, out, sizeof(out), 0, (const struct sockaddr*)&from, fromLen);
+      rawSend(clientPcb, k.addr, k.port, out, sizeof(out));
     }
     return;
   }
   counters.queries++;
   uint32_t start = millis();
-  Client c = {from, fromLen, fd};
+  Client c;
+  toSockaddr(k.addr, k.port, c.addr, c.len);
+  c.fd = -1;
   uint16_t limit = udpLimitOf(buf, len);
 
   uint8_t out[DNS_MAX_PACKET];
@@ -391,17 +494,24 @@ void onClientQuery(int fd, uint8_t* buf, int len, const struct sockaddr_storage&
   sendNext(*p);
 }
 
-void onUpstreamReply(uint8_t* buf, int len, const struct sockaddr_in& from) {
+void onUpstreamReply(Packet& k) {
+  uint8_t* buf = k.data;
+  int len = k.len;
   if (len < dnsmsg::HEADER || !dnsmsg::isResponse(buf)) return;
   uint16_t rid = dnsmsg::id(buf);
   for (int i = 0; i < DNS_MAX_PENDING; i++) {
     Pending& p = pend[i];
     if (!p.used || p.upId != rid) continue;
     // Must come from the server we asked, and answer what we asked.
-    struct sockaddr_in expect;
-    if (!serverAddr((Route)p.routes[p.at], expect) ||
-        expect.sin_addr.s_addr != from.sin_addr.s_addr || expect.sin_port != from.sin_port) {
-      return;
+    Route r = (Route)p.routes[p.at];
+    if (r == R_DOT) {
+      if (k.src != SRC_DOT) return;
+    } else {
+      struct sockaddr_in expect;
+      if (k.src != SRC_UPSTREAM || !serverAddr(r, expect) || !IP_IS_V4(&k.addr) ||
+          ip4_addr_get_u32(ip_2_ip4(&k.addr)) != expect.sin_addr.s_addr || k.port != DNS_PORT) {
+        return;
+      }
     }
     if (!dnsmsg::sameQuestion(buf, len, p.q)) return;
 
@@ -432,40 +542,23 @@ void checkTimeouts() {
 }
 
 void udpTask(void*) {
-  static uint8_t buf[DNS_MAX_PACKET];
+  uint32_t reportedDrops = 0, lastReportMs = 0;
   for (;;) {
-    fd_set rd;
-    FD_ZERO(&rd);
-    int maxfd = up;
-    FD_SET(up, &rd);
-    FD_SET(udp4, &rd);
-    maxfd = max(maxfd, udp4);
-    if (udp6 >= 0) { FD_SET(udp6, &rd); maxfd = max(maxfd, udp6); }
-    struct timeval tv = {0, 50 * 1000};
-    int ready = select(maxfd + 1, &rd, nullptr, nullptr, &tv);
-
-    if (ready > 0) {
-      // Upstream first: it frees pending slots for the queries behind it.
-      if (FD_ISSET(up, &rd)) {
-        for (int k = 0; k < 16; k++) {
-          struct sockaddr_in from;
-          socklen_t fl = sizeof(from);
-          int n = recvfrom(up, buf, sizeof(buf), MSG_DONTWAIT, (struct sockaddr*)&from, &fl);
-          if (n <= 0) break;
-          onUpstreamReply(buf, n, from);
-        }
-      }
-      int listeners[2] = {udp4, udp6};
-      for (int fd : listeners) {
-        if (fd < 0 || !FD_ISSET(fd, &rd)) continue;
-        for (int k = 0; k < 16; k++) {
-          struct sockaddr_storage from;
-          socklen_t fl = sizeof(from);
-          int n = recvfrom(fd, buf, sizeof(buf), MSG_DONTWAIT, (struct sockaddr*)&from, &fl);
-          if (n <= 0) break;
-          onClientQuery(fd, buf, n, from, fl);
-        }
-      }
+    // A full receive pool means the burst was deeper than DNS_RX_SLOTS.
+    if (dropped != reportedDrops && millis() - lastReportMs > 10000) {
+      Serial.printf("[dns] receive pool full: %lu packets dropped so far\n", (unsigned long)dropped);
+      reportedDrops = dropped;
+      lastReportMs = millis();
+    }
+    uint8_t idx;
+    // Wake for the next packet, or every 20 ms to check upstream timeouts.
+    if (xQueueReceive(workQ, &idx, pdMS_TO_TICKS(20)) == pdTRUE) {
+      do {
+        Packet& k = pool[idx];
+        if (k.src == SRC_CLIENT) onClientQuery(k);
+        else onUpstreamReply(k);
+        xQueueSend(freeQ, &idx, 0);
+      } while (xQueueReceive(workQ, &idx, 0) == pdTRUE);
     }
     checkTimeouts();
   }
@@ -529,7 +622,7 @@ void serveTcpQuery(int fd, const Client& c, uint8_t* q, int qlen, uint8_t* out, 
   }
   for (int i = 0; i < d.nroutes; i++) {
     Route r = (Route)d.routes[i];
-    if (r == R_DOT) continue;   // the DoT proxy speaks UDP to the sinkhole only
+    if (r == R_DOT) continue;   // DoT replies come back to the UDP task's pending table
     uint32_t server = r == R_DNS1 ? dns1Ip : r == R_DNS2 ? dns2Ip : routerIp;
     if (!server) continue;
     int n = tcpExchange(server, q, qlen, out, cap);
@@ -586,26 +679,17 @@ void tcpTask(void*) {
 
 // ---- sockets --------------------------------------------------------------
 
-int bindUdp(int family) {
-  int fd = socket(family, SOCK_DGRAM, 0);
-  if (fd < 0) return -1;
-  int rc;
-  if (family == AF_INET6) {
-    int one = 1;
-    setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
-    struct sockaddr_in6 a = {};
-    a.sin6_family = AF_INET6;
-    a.sin6_port = htons(DNS_PORT);
-    rc = bind(fd, (struct sockaddr*)&a, sizeof(a));
-  } else {
-    struct sockaddr_in a = {};
-    a.sin_family = AF_INET;
-    a.sin_port = htons(DNS_PORT);
-    a.sin_addr.s_addr = INADDR_ANY;
-    rc = bind(fd, (struct sockaddr*)&a, sizeof(a));
+// A raw UDP endpoint. `port` 0 picks an ephemeral one.
+udp_pcb* rawListen(uint8_t type, uint16_t port, Source src) {
+  LOCK_TCPIP_CORE();
+  udp_pcb* pcb = udp_new_ip_type(type);
+  if (pcb && udp_bind(pcb, type == IPADDR_TYPE_V4 ? IP4_ADDR_ANY : IP_ANY_TYPE, port) != ERR_OK) {
+    udp_remove(pcb);
+    pcb = nullptr;
   }
-  if (rc < 0) { close(fd); return -1; }
-  return fd;
+  if (pcb) udp_recv(pcb, onRaw, (void*)(uintptr_t)src);
+  UNLOCK_TCPIP_CORE();
+  return pcb;
 }
 
 int listenTcp(int family) {
@@ -635,6 +719,12 @@ int listenTcp(int family) {
 
 void prealloc() {
   if (!pend) pend = (Pending*)ps_calloc(DNS_MAX_PENDING, sizeof(Pending));
+  if (!pool) {
+    pool  = (Packet*)ps_calloc(DNS_RX_SLOTS, sizeof(Packet));
+    freeQ = xQueueCreate(DNS_RX_SLOTS, sizeof(uint8_t));
+    workQ = xQueueCreate(DNS_RX_SLOTS, sizeof(uint8_t));
+    for (uint8_t i = 0; pool && i < DNS_RX_SLOTS; i++) xQueueSend(freeQ, &i, 0);
+  }
   dnscache::begin(DNS_CACHE_SLOTS);
 }
 
@@ -642,26 +732,23 @@ bool begin() {
   dns1Ip = parseV4(g_settings.dns1);
   dns2Ip = parseV4(g_settings.dns2);
   if (started) return true;
-  if (!pend) prealloc();
-  if (!pend) {
-    Serial.println("[dns] no memory for the pending table");
+  if (!pend || !pool) prealloc();
+  if (!pend || !pool || !freeQ || !workQ) {
+    Serial.println("[dns] no memory for the pending table or receive pool");
     return false;
   }
 
-  udp4 = bindUdp(AF_INET);
-  if (udp4 < 0) {
+  // One endpoint answers IPv4 and IPv6 alike when IPv6 is on.
+  clientPcb = rawListen(g_settings.ipv6 ? IPADDR_TYPE_ANY : IPADDR_TYPE_V4, DNS_PORT, SRC_CLIENT);
+  if (!clientPcb) {
     Serial.println("[dns] port 53 bind failed");
     return false;
   }
-  if (g_settings.ipv6) {
-    udp6 = bindUdp(AF_INET6);
-    if (udp6 < 0) Serial.println("[dns] IPv6 bind failed -- IPv4 only");
-  }
-  up = socket(AF_INET, SOCK_DGRAM, 0);
+  upPcb = rawListen(IPADDR_TYPE_V4, 0, SRC_UPSTREAM);
   tcp4 = listenTcp(AF_INET);
   if (g_settings.ipv6) tcp6 = listenTcp(AF_INET6);
 
-  if (up < 0 ||
+  if (!upPcb ||
       xTaskCreatePinnedToCore(udpTask, "dns", DNS_TASK_STACK, nullptr, DNS_TASK_PRIORITY,
                               nullptr, 1) != pdPASS) {
     Serial.println("[dns] worker not started");
@@ -671,9 +758,9 @@ bool begin() {
     xTaskCreatePinnedToCore(tcpTask, "dnstcp", DNS_TASK_STACK, nullptr, 1, nullptr, 1);
   }
   started = true;
-  Serial.printf("[dns] serving on %s:%d (udp%s, tcp%s), upstream %s / %s\n",
-                WiFi.localIP().toString().c_str(), DNS_PORT, udp6 >= 0 ? "+v6" : "",
-                tcp4 >= 0 ? (tcp6 >= 0 ? "+v6" : "") : " off", g_settings.dns1.c_str(),
+  Serial.printf("[dns] serving on %s:%d (udp%s, tcp%s), %d-packet receive queue, upstream %s / %s\n",
+                WiFi.localIP().toString().c_str(), DNS_PORT, g_settings.ipv6 ? "+v6" : "",
+                tcp4 >= 0 ? (tcp6 >= 0 ? "+v6" : "") : " off", DNS_RX_SLOTS, g_settings.dns1.c_str(),
                 g_settings.dns2.c_str());
   return true;
 }
@@ -682,7 +769,28 @@ bool running() { return started; }
 
 void setRouter(uint32_t ipv4) { routerIp = ipv4; }
 
-Stats stats() { return counters; }
+Stats stats() {
+  Stats s = counters;
+  s.dropped = dropped;
+  return s;
+}
+
+bool fromDot(const uint8_t* data, int len) {
+  uint8_t idx;
+  if (!pool || len > DNS_MAX_PACKET || xQueueReceive(freeQ, &idx, 0) != pdTRUE) {
+    dropped = dropped + 1;
+    return false;
+  }
+  Packet& k = pool[idx];
+  k.src = SRC_DOT;
+  k.len = (uint16_t)len;
+  memcpy(k.data, data, len);
+  if (xQueueSend(workQ, &idx, 0) != pdTRUE) {
+    xQueueSend(freeQ, &idx, 0);
+    return false;
+  }
+  return true;
+}
 
 String recentBlocked() {
   String out;
