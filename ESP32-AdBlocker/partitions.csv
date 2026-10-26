@@ -1,0 +1,9 @@
+# ESP32-S3 N16R8: one 4 MB app slot, the rest LittleFS for the blocklist
+# snapshot and the custom list. arduino-cli picks this file up from the sketch
+# folder automatically.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x400000,
+spiffs,   data, spiffs,   0x410000, 0xBE0000,
+coredump, data, coredump, 0xFF0000, 0x10000,

@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# Credentials -- never commit
+# ---------------------------------------------------------------------------
+# Nothing here uses a secrets.h -- all configuration lives in NVS and is set
+# from the web portal. These rules are a cheap backstop so a stray local one
+# (a scratch file, a copy from another project) can never be committed.
+ESP32-AdBlocker/secrets.h
+ESP32-AdBlocker/secrets.h.*
+ESP32-AdBlocker/secrets.h~
+!ESP32-AdBlocker/secrets.h.example
+
+# Belt and braces: same patterns anywhere in the tree, in case the sketch
+# folder is ever moved or renamed.
+**/secrets.h
+**/secrets.h.*
+!**/secrets.h.example
+
+# Anything else that tends to hold credentials
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+curl.cfg
+.netrc
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+# Build artefacts. Since configuration moved to NVS these no longer contain
+# credentials, but there is still no reason to commit them.
+build/
+Build/
+# Release binaries go on the GitHub release page, not in git.
+dist/
+*.bin
+*.elf
+*.map
+*.hex
+*.o
+*.a
+*.d
+
+# arduino-cli / Arduino IDE
+.arduino/
+*.arduino.*
+sketch/
+
+# ---------------------------------------------------------------------------
+# Test artifacts
+# ---------------------------------------------------------------------------
+test/test_settings
+test/test_commands
+test/test_schedule
+test/test_blparse
+test/*.dSYM/
+
+# ---------------------------------------------------------------------------
+# Captured logs -- serial output contains the SSID, local IPs and MACs
+# ---------------------------------------------------------------------------
+*.log
+serial*.txt
+monitor*.txt
+
+# ---------------------------------------------------------------------------
+# OS and editor noise
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
